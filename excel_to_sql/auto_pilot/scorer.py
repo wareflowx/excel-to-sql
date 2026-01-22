@@ -125,10 +125,10 @@ class QualityScorer:
 
         # Calculate final score (start at 100, subtract penalties)
         penalties = (
-            self.MAX_COMPLETENESS_PENALTY - completeness_result["penalty"]
-            + self.MAX_UNIQUENESS_PENALTY - uniqueness_result["penalty"]
-            + self.MAX_VALIDITY_PENALTY - validity_result["penalty"]
-            + self.MAX_CONSISTENCY_PENALTY - consistency_result["penalty"]
+            completeness_result["penalty"]
+            + uniqueness_result["penalty"]
+            + validity_result["penalty"]
+            + consistency_result["penalty"]
         )
 
         result["score"] = max(0, 100 - penalties)
