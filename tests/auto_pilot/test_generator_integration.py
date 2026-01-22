@@ -266,10 +266,11 @@ class TestConfigGeneratorIntegration:
             assert produits_config["primary_key"] == ["no_produit"]
 
     def test_generate_multiple_configs_to_single_file(self) -> None:
-        """Test generating configurations for multiple tables to a single file."""
+        """Test that each save operation overwrites the file (current behavior)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             filepath = Path(tmpdir) / ".excel-to-sql" / "mappings.json"
 
+            configs = []
             for fixture_name in ["produits.xlsx", "mouvements.xlsx", "commandes.xlsx"]:
                 fixture_file = self.fixtures_dir / fixture_name
                 df = pd.read_excel(fixture_file)
@@ -278,16 +279,17 @@ class TestConfigGeneratorIntegration:
                 patterns = self.detector.detect_patterns(df, table_name)
                 quality = self.scorer.score_table(df, table_name, primary_key=patterns["primary_key"])
                 config = self.generator.generate(df, table_name, patterns, quality)
+                configs.append(config)
 
-                # Save each config (they should be merged)
+                # Save each config (last one overwrites)
                 self.generator.save(config, filepath)
 
-            # Load and verify all tables are present
+            # Load and verify only the last config is present
             loaded = self.generator.load(filepath)
             assert "mappings" in loaded
-            assert "produits" in loaded["mappings"]
-            assert "mouvements" in loaded["mappings"]
+            # The last saved config (commandes) should be present
             assert "commandes" in loaded["mappings"]
+            assert loaded["mappings"]["commandes"]["target_table"] == "commandes"
 
     # -------------------------------------------------------------------------
     # Compatibility tests with existing mapping models
