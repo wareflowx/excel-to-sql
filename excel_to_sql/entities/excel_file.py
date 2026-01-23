@@ -10,6 +10,8 @@ from typing import Optional, List, Dict, Literal
 import pandas as pd
 import hashlib
 
+from excel_to_sql.exceptions import ExcelFileError
+
 
 class ExcelFile:
     """
@@ -103,8 +105,27 @@ class ExcelFile:
                 return pd.read_excel(self._path, sheet_name=actual_sheet, header=header_row, engine="openpyxl")
 
             return pd.read_excel(self._path, sheet_name=actual_sheet, header=header, engine="openpyxl")
+        except (FileNotFoundError, PermissionError):
+            # Re-raise filesystem errors as-is
+            raise
+        except pd.errors.EmptyDataError as e:
+            raise ExcelFileError(
+                f"Excel file is empty: {self._path.name}",
+                file_path=str(self._path),
+                operation="read"
+            ) from e
+        except pd.errors.ParserError as e:
+            raise ExcelFileError(
+                f"Invalid Excel file format: {self._path.name}",
+                file_path=str(self._path),
+                operation="read"
+            ) from e
         except Exception as e:
-            raise ValueError(f"Failed to read Excel file: {e}") from e
+            raise ExcelFileError(
+                f"Failed to read Excel file: {self._path.name}",
+                file_path=str(self._path),
+                operation="read"
+            ) from e
 
     def read_all_sheets(self) -> Dict[str, pd.DataFrame]:
         """
@@ -124,8 +145,26 @@ class ExcelFile:
 
         try:
             return pd.read_excel(self._path, sheet_name=None, engine="openpyxl")
+        except (FileNotFoundError, PermissionError):
+            raise
+        except pd.errors.EmptyDataError as e:
+            raise ExcelFileError(
+                f"Excel file is empty: {self._path.name}",
+                file_path=str(self._path),
+                operation="read_all_sheets"
+            ) from e
+        except pd.errors.ParserError as e:
+            raise ExcelFileError(
+                f"Invalid Excel file format: {self._path.name}",
+                file_path=str(self._path),
+                operation="read_all_sheets"
+            ) from e
         except Exception as e:
-            raise ValueError(f"Failed to read Excel file: {e}") from e
+            raise ExcelFileError(
+                f"Failed to read Excel file: {self._path.name}",
+                file_path=str(self._path),
+                operation="read_all_sheets"
+            ) from e
 
     def read_sheets(self, sheet_names: List[str]) -> Dict[str, pd.DataFrame]:
         """
@@ -146,8 +185,15 @@ class ExcelFile:
         for sheet_name in sheet_names:
             try:
                 result[sheet_name] = self.read(sheet_name)
+            except ExcelFileError:
+                # Re-raise ExcelFileError as-is
+                raise
             except Exception as e:
-                raise ValueError(f"Failed to read sheet '{sheet_name}': {e}") from e
+                raise ExcelFileError(
+                    f"Failed to read sheet: {sheet_name}",
+                    file_path=str(self._path),
+                    operation="read_sheets"
+                ) from e
 
         return result
 
