@@ -7,11 +7,19 @@ from typer import Typer, Option, Exit
 from rich.console import Console
 from rich.table import Table
 import pandas as pd
+import logging
 
 from excel_to_sql.entities.project import Project
 from excel_to_sql.entities.excel_file import ExcelFile
 from excel_to_sql.entities.dataframe import DataFrame
 from excel_to_sql.__version__ import __version__
+from excel_to_sql.exceptions import (
+    ExcelToSqlError,
+    ExcelFileError,
+    ConfigurationError,
+    ValidationError,
+    DatabaseError,
+)
 
 app = Typer(
     name="excel-to-sql",
@@ -21,6 +29,7 @@ app = Typer(
 )
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -187,10 +196,42 @@ def import_cmd(
 
     except FileNotFoundError:
         console.print(f"[red]Error:[/red] File not found: {excel_path}")
+        console.print("[dim]Tip: Check the file path and try again[/dim]")
         raise Exit(1)
 
-    except ValueError as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except PermissionError:
+        console.print(f"[red]Error:[/red] Permission denied: {excel_path}")
+        console.print("[dim]Tip: Check file permissions or run with appropriate access[/dim]")
+        raise Exit(1)
+
+    except pd.errors.EmptyDataError:
+        console.print(f"[red]Error:[/red] Excel file is empty: {excel_path}")
+        console.print("[dim]Tip: Ensure the file contains data in the first sheet[/dim]")
+        raise Exit(1)
+
+    except pd.errors.ParserError as e:
+        console.print(f"[red]Error:[/red] Invalid Excel file format: {excel_path}")
+        console.print(f"[dim]Details: {e}[/dim]")
+        console.print("[dim]Tip: Ensure the file is a valid .xlsx or .xls file[/dim]")
+        raise Exit(1)
+
+    except ConfigurationError as e:
+        console.print(f"[red]Error:[/red] Configuration error: {e.message}")
+        if e.context:
+            console.print(f"[dim]Context: {e.context}[/dim]")
+        console.print("[dim]Tip: Check your configuration files or run 'excel-to-sql init'[/dim]")
+        raise Exit(1)
+
+    except ValidationError as e:
+        console.print(f"[red]Error:[/red] Validation error: {e.message}")
+        if e.context:
+            console.print(f"[dim]Details: {e.context}[/dim]")
+        raise Exit(1)
+
+    except DatabaseError as e:
+        console.print(f"[red]Error:[/red] Database error: {e.message}")
+        if e.context:
+            console.print(f"[dim]Context: {e.context}[/dim]")
         raise Exit(1)
 
     except Exit:
@@ -198,10 +239,14 @@ def import_cmd(
         raise
 
     except Exception as e:
-        console.print(f"[red]Error:[/red] Import failed")
-        console.print(f"  {e}")
+        # Log unexpected errors
+        logger.exception(f"Unexpected error importing {excel_path}")
+        console.print("[red]Error:[/red] An unexpected error occurred during import")
+        console.print(f"[dim]Details: {e}[/dim]")
         if "--debug" in sys.argv:
             console.print(traceback.format_exc())
+        else:
+            console.print("[dim]Use --debug for more information[/dim]")
         raise Exit(1)
 
 
@@ -292,8 +337,9 @@ def export_cmd(
                     try:
                         if len(str(cell.value)) > max_length:
                             max_length = len(str(cell.value))
-                    except:
-                        pass
+                    except (AttributeError, TypeError):
+                        # Cell value is None or has unexpected type, skip it
+                        continue
 
                 adjusted_width = min(max_length + 2, 50)  # Cap at 50
                 worksheet.column_dimensions[column_letter].width = adjusted_width
@@ -335,11 +381,32 @@ def export_cmd(
 
         console.print(summary_table)
 
+    except FileNotFoundError:
+        console.print(f"[red]Error:[/red] Table not found in database")
+        if table:
+            console.print(f"[dim]Table: {table}[/dim]")
+        console.print("[dim]Tip: Check the table name or import data first[/dim]")
+        raise Exit(1)
+
+    except PermissionError:
+        console.print(f"[red]Error:[/red] Permission denied: {output}")
+        console.print("[dim]Tip: Check write permissions for the output directory[/dim]")
+        raise Exit(1)
+
+    except DatabaseError as e:
+        console.print(f"[red]Error:[/red] Database error: {e.message}")
+        if e.context:
+            console.print(f"[dim]Context: {e.context}[/dim]")
+        raise Exit(1)
+
     except Exit:
         raise
+
     except Exception as e:
-        console.print(f"[red]Error:[/red] Export failed")
-        console.print(f"[dim]{e}[/dim]")
+        logger.exception(f"Unexpected error during export to {output}")
+        console.print("[red]Error:[/red] An unexpected error occurred during export")
+        console.print(f"[dim]Details: {e}[/dim]")
+        console.print("[dim]Use --debug for more information[/dim]")
         raise Exit(1)
 
 
@@ -354,6 +421,10 @@ def status() -> None:
     try:
         # Load project
         project = Project.from_current_directory()
+    except ConfigurationError as e:
+        console.print(f"[red]Error:[/red] Configuration error: {e.message}")
+        console.print("[dim]Tip: Run 'excel-to-sql init' to initialize[/dim]")
+        raise Exit(1)
     except Exception:
         console.print("[red]Error:[/red] Not an excel-to-sql project")
         console.print("[dim]Run 'excel-to-sql init' to initialize[/dim]")
@@ -552,10 +623,28 @@ def magic(
                             "column_count": len(df.columns),
                         }
 
+                    except FileNotFoundError:
+                        console.print(f"  [red]Error:[/red] File not found: {sheet_name}")
+                    except PermissionError:
+                        console.print(f"  [red]Error:[/red] Permission denied: {sheet_name}")
+                    except pd.errors.EmptyDataError:
+                        console.print(f"  [yellow]Warning:[/yellow] Empty sheet: {sheet_name}")
+                    except pd.errors.ParserError as e:
+                        console.print(f"  [red]Error analyzing {sheet_name}:[/red] Invalid Excel format")
+                    except ExcelFileError as e:
+                        console.print(f"  [red]Error analyzing {sheet_name}:[/red] {e.message}")
                     except Exception as e:
+                        logger.warning(f"Unexpected error analyzing {sheet_name}: {e}")
                         console.print(f"  [red]Error analyzing {sheet_name}:[/red] {e}")
 
+            except FileNotFoundError:
+                console.print(f"[red]Error:[/red] File not found: {excel_file.name}")
+            except PermissionError:
+                console.print(f"[red]Error:[/red] Permission denied: {excel_file.name}")
+            except ExcelFileError as e:
+                console.print(f"[red]Error processing {excel_file.name}:[/red] {e.message}")
             except Exception as e:
+                logger.warning(f"Unexpected error processing {excel_file.name}: {e}")
                 console.print(f"[red]Error processing {excel_file.name}:[/red] {e}")
 
     # Interactive mode
@@ -580,6 +669,27 @@ def magic(
                 df = header_detector.read_excel_with_header_detection(result["file"], result["sheet"])
                 quality_report = scorer.generate_quality_report(df, table_name)
                 quality_dict[table_name] = quality_report
+            except FileNotFoundError:
+                # Default quality report if file not found
+                quality_dict[table_name] = {
+                    "score": 0,
+                    "grade": "F",
+                    "issues": ["File not found"]
+                }
+            except PermissionError:
+                # Default quality report if permission denied
+                quality_dict[table_name] = {
+                    "score": 0,
+                    "grade": "F",
+                    "issues": ["Permission denied"]
+                }
+            except ExcelFileError:
+                # Default quality report if analysis fails
+                quality_dict[table_name] = {
+                    "score": 50,
+                    "grade": "C",
+                    "issues": ["Excel file error"]
+                }
             except Exception:
                 # Default quality report if analysis fails
                 quality_dict[table_name] = {
